@@ -17,11 +17,11 @@ namespace {
     }
 }
 
-bool forEach_RepresentationItem( EntityArray const &path, std::function<void(EntityArray const&)> const &fcn ) {
+void forEach_RepresentationItem( EntityArray const &path, std::function<void(EntityArray const&)> const &fcn ) {
     auto const ntt = path.back();
     auto type = kA3DTypeUnknown;
     if(A3D_SUCCESS != A3DEntityGetType( ntt, &type) ) {
-        return false;
+        return;
     }
 
     EntityArray children;
@@ -29,7 +29,7 @@ bool forEach_RepresentationItem( EntityArray const &path, std::function<void(Ent
         A3DAsmModelFileData mfd;
         A3D_INITIALIZE_DATA(A3DAsmModelFileData, mfd);
         if(A3D_SUCCESS != A3DAsmModelFileGet( ntt, &mfd ) ) {
-            return false;
+            return;
         }
         children = EntityArray( mfd.m_ppPOccurrences, mfd.m_ppPOccurrences + mfd.m_uiPOccurrencesSize );
         A3DAsmModelFileGet( nullptr, &mfd );
@@ -37,7 +37,7 @@ bool forEach_RepresentationItem( EntityArray const &path, std::function<void(Ent
         A3DAsmProductOccurrenceData pod;
         A3D_INITIALIZE_DATA(A3DAsmProductOccurrenceData, pod);
         if(A3D_SUCCESS != A3DAsmProductOccurrenceGet( ntt, &pod ) ) {
-            return false;
+            return;
         }
         children = EntityArray( pod.m_ppPOccurrences, pod.m_ppPOccurrences + pod.m_uiPOccurrencesSize );
         if( auto part = pod.m_pPart ? pod.m_pPart : getPart( pod.m_pPrototype ) ) {
@@ -49,7 +49,7 @@ bool forEach_RepresentationItem( EntityArray const &path, std::function<void(Ent
         A3DAsmPartDefinitionData pdd;
         A3D_INITIALIZE_DATA(A3DAsmPartDefinitionData, pdd);
         if(A3D_SUCCESS != A3DAsmPartDefinitionGet( ntt, &pdd ) ) {
-            return false;
+            return;
         }
         children = EntityArray( pdd.m_ppRepItems, pdd.m_ppRepItems + pdd.m_uiRepItemsSize );
         A3DAsmPartDefinitionGet( nullptr, &pdd );
@@ -58,7 +58,7 @@ bool forEach_RepresentationItem( EntityArray const &path, std::function<void(Ent
             A3DRiSetData risd;
             A3D_INITIALIZE_DATA(A3DRiSetData, risd);
             if(A3D_SUCCESS != A3DRiSetGet( ntt, &risd ) ) {
-                return false;
+                return;
             }
             children = EntityArray( risd.m_ppRepItems, risd.m_ppRepItems + risd.m_uiRepItemsSize );
             A3DRiSetGet( nullptr, &risd );
@@ -72,6 +72,4 @@ bool forEach_RepresentationItem( EntityArray const &path, std::function<void(Ent
         child_path.push_back( child );
         forEach_RepresentationItem( child_path, fcn );
     }
-
-    return true;
 }
