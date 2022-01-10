@@ -1,0 +1,9 @@
+{
+    "cmake.buildEnvironment": {
+        "CMAKE_PREFIX_PATH": "/opt/local/ts3d/Qt/6.1.2/macos/lib/cmake"
+    },
+    "cmake.cmakePath": "/opt/local/ts3d/Qt/6.1.2/macos/bin/qt-cmake",
+    "files.associations": {
+        "functional": "cpp"
+    }
+}
