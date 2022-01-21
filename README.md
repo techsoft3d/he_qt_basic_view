@@ -96,7 +96,13 @@ All the functionality we just listed has been stubbed out in the project you clo
 First, we will declare and initialize a struct to control how to generate the tessellation for a representation item.
 Add the following lines of code after the creation of `rootEntity.`
 
-![](media/image1.emf)
+```cpp
+// Create tessellation parameters to control behavior
+A3DRWParamsTessellationData tess_params;
+A3D_INITIALIZE_DATA( A3DRWParamsTessellationData, tess_params );
+// Use the "preset" option for medium level of detail
+tess_params.m_eTessellationLevelOfDetail = kA3DTessLODMedium;
+```
 
 For simplicity’s sake, we are using the level of detail enumeration in the options struct, which controls a set of specific tessellation options.
 This is suitable for a basic viewing workflow.
@@ -107,7 +113,12 @@ For now, let’s assume it exists and does what we want—that is, it traverses 
 For each representation item, the provided lambda is invoked.
 Add the following lines of code after the tessellation parameters are set up.
 
-![](media/image2.emf)
+```cpp
+// Iterate over each representation item
+forEach_RepresentationItem(model_file, [&](EntityArray const &path) {
+
+});
+```
 
 The lambda’s parameter is an `EntityArray,` which is a type alias for `QVector<A3DEntity*>`.
 It contains an ordered list of pointers to each node in the assembly hierarchy.
@@ -125,7 +136,14 @@ It’s stubbed out, so for now let’s assume it behaves as we need it to.
 
 Add the following lines of code within the body of the lambda:
 
-![](media/image3.emf)
+```cpp
+CascadedAttributes ca( path );
+// Determine if this item should be skipped
+
+if( ca->m_bRemoved || !ca->m_bShow ) {
+  return;
+}
+```
 
 `CascadedAttributes` overloads `operator->`, providing direct access to the `A3DMiscCascadedAttributesData` struct contained within.
 If this instance of the representation item was removed or should not be shown, we bail out early.
@@ -133,11 +151,26 @@ If this instance of the representation item was removed or should not be shown, 
 If we don’t bail out early, our next step is to generate the tessellation in Exchange.
 To do this, we add the following lines of code:
 
-![](media/image4.emf)
+```cpp
+A3DRiRepresentationItem *ri = path.back();
+
+// Generate a tessellation using the options we declared above
+A3DRiRepresentationItemComputeTessellation( ri, &tess_params);
+```
 
 Now that we’ve tessellated the representation item, we can access the data.
 
-![](media/image5.emf)
+```cpp
+// Fetch the data for this representation item
+A3DRiRepresentationItemData rid;
+A3D_INITIALIZE_DATA( A3DRiRepresentationItemData, rid );
+if( A3D_SUCCESS != A3DRiRepresentationItemGet( ri, &rid ) ) {
+  return;
+}
+
+// The tessellation is stored in m_pTessBase
+auto tess_base = rid.m_pTessBase;
+```
 
 You should be well familiar with the pattern presented above which uses an opaque object handle (`ri`) to read its associated data into a struct.
 The tessellation handle is then obtained from the struct, and we’re ready to use it.
@@ -146,7 +179,23 @@ Using the handle to the tessellation, we next attempt to create a `Qt3D` mesh.
 If we’re successful, we create and apply its material and transform.
 This is done as follows, using a few additional functions that are stubbed out already:
 
-![](media/image6.emf)
+```cpp
+// Create the mesh
+if( auto mesh = createMesh( tess_base ) ) {
+  auto node = new Qt3DCore::QEntity( rootEntity );
+  node->addComponent( mesh );
+  
+  // Create the material
+  if( auto material = createMaterial( ca->m_sStyle ) ) {
+    node->addComponent( material );
+  }
+
+  // Create the transform
+  if( auto transform = createTransform( path ) ) {
+    node->addComponent( transform );
+  }
+}
+```
 
 If a mesh is obtained, we create a node to hold it, along with the material and transform.
 The node is a child of `rootEntity.`
@@ -156,7 +205,9 @@ Recall that any time you read data from Exchange, you must be sure to free any a
 
 Free the representation item data with the following (and final) line of code inside the body of the lambda:
 
-![](media/image7.emf)
+```cpp
+A3DRiRepresentationItemGet( nullptr, &rid );
+```
 
 This completes the high-level implementation of constructing the scene.
 We’ve obviously left many implementation details for future steps, but we have accomplished the task of composing the basic scene graph needed to render a model.
@@ -169,7 +220,20 @@ We’ll attack each task in a systematic way, beginning with traversing the asse
 Let’s begin with a short description of how the function must behave.
 Open the file ForEachRepresentationItem.cpp in your editor and you’ll find the stubbed-out version of the code:
 
-![](media/image8.emf)
+```cpp
+namespace {
+  void forEach_Impl( EntityArray const &path, std::function<void(EntityArray
+  const&)> const &fcn ) {
+    Q_UNUSED(path);
+    Q_UNUSED(fcn);
+  }
+}
+
+void forEach_RepresentationItem( A3DAsmModelFile *model_file,
+std::function<void(EntityArray const&)> const &fcn ) {
+  forEach_Impl( { model_file }, fcn );
+}
+```
 
 The function takes two parameters.
 The first is an opaque handle to the model file.
@@ -192,12 +256,47 @@ So, let’s implement the case we already know about- when this function is invo
 In this case, we want to add each child `A3DAsmProductOccurrence` handle to the path and call the function again to dig deeper.
 It should look something like this:
 
-![](media/image9.emf)
+```cpp
+auto const ntt = path.back();
+auto type = kA3DTypeUnknown;
+if(A3D_SUCCESS != A3DEntityGetType( ntt, &type) ) {
+  return;
+}
+
+EntityArray children;
+if(kA3DTypeAsmModelFile == type) {
+  A3DAsmModelFileData mfd;
+  A3D_INITIALIZE_DATA(A3DAsmModelFileData, mfd);
+  if(A3D_SUCCESS != A3DAsmModelFileGet( ntt, &mfd ) ) {
+    return;
+  }
+  children = EntityArray( mfd.m_ppPOccurrences, mfd.m_ppPOccurrences +
+  mfd.m_uiPOccurrencesSize );
+  A3DAsmModelFileGet( nullptr, &mfd );
+}
+
+for( auto child : children ) {
+  auto child_path = path;
+  child_path.push_back( child );
+  forEach_Impl( child_path, fcn );
+}
+```
 
 This implementation is recursive and invokes itself with an `A3DAsmProductOccurrence` handle as the value of `path.back()`.
 Let’s augment the code to handle this case by adding to the if clause.
 
-![](media/image10.emf)
+```cpp
+else if( kA3DTypeAsmProductOccurrence == type ) {
+  A3DAsmProductOccurrenceData pod;
+  A3D_INITIALIZE_DATA(A3DAsmProductOccurrenceData, pod);
+  if(A3D_SUCCESS != A3DAsmProductOccurrenceGet( ntt, &pod ) ) {
+    return;
+  }
+  children = EntityArray( pod.m_ppPOccurrences, pod.m_ppPOccurrences +
+  pod.m_uiPOccurrencesSize );
+  A3DAsmProductOccurrenceGet( nullptr, &pod );
+}
+```
 
 And where to go from here? This handles the entire assembly hierarchy, up to the point where a node contains a part.
 So, in addition to processing children as shown in the above implementation, we must check to see if an `A3DAsmProductOccurrence` contains a part.
@@ -208,16 +307,55 @@ Part instancing is achieved by utilizing the `m_pPrototype` handle, which refere
 If a node has a null `m_pPart` handle, you must also recursively check its prototype, if it has one.
 To implement this logic, add the getPart function at the top of the anonymous namespace.
 
-![](media/image11.emf)
+```cpp
+A3DAsmPartDefinition *getPart( A3DAsmProductOccurrence *po ) {
+  if( nullptr == po ) {
+    return nullptr;
+  }
+
+  A3DAsmProductOccurrenceData pod;
+  A3D_INITIALIZE_DATA(A3DAsmProductOccurrenceData, pod);
+  if(A3D_SUCCESS != A3DAsmProductOccurrenceGet( po, &pod ) ) {
+    return nullptr;
+  }
+  auto part = pod.m_pPart ? pod.m_pPart : getPart( pod.m_pPrototype );
+  A3DAsmProductOccurrenceGet( nullptr, &pod );
+  return part;
+  }
+```
 
 Now, we can use this function inside the clause you just added that handles `A3DAsmPartDefinition` objects:
 
-![](media/image12.emf)
+```cpp
+  else if( kA3DTypeAsmProductOccurrence == type ) {
+  A3DAsmProductOccurrenceData pod;
+  A3D_INITIALIZE_DATA(A3DAsmProductOccurrenceData, pod);
+  if(A3D_SUCCESS != A3DAsmProductOccurrenceGet( ntt, &pod ) ) {
+    return;
+  }
+  children = EntityArray( pod.m_ppPOccurrences, pod.m_ppPOccurrences +
+  pod.m_uiPOccurrencesSize );
+  if( auto part = pod.m_pPart ? pod.m_pPart : getPart( pod.m_pPrototype ) ) {
+    children.insert( children.begin(), part );
+  }
+  A3DAsmProductOccurrenceGet( nullptr, &pod );
+}
+```
 
 We’ve made it to a part definition!
 So let add part definition traversal to the clause:
 
-![](media/image13.emf)
+```cpp
+} else if( kA3DTypeAsmPartDefinition == type ) {
+  A3DAsmPartDefinitionData pdd;
+  A3D_INITIALIZE_DATA(A3DAsmPartDefinitionData, pdd);
+  if(A3D_SUCCESS != A3DAsmPartDefinitionGet( ntt, &pdd ) ) {
+    return;
+  }
+  children = EntityArray( pdd.m_ppRepItems, pdd.m_ppRepItems +
+  pdd.m_uiRepItemsSize );
+  A3DAsmPartDefinitionGet( nullptr, &pdd );
+```
 
 Landing us on representation items, where we should be invoking the callback function, providing the path used to get us here.
 But before we can do that, we mustn’t forget the specific representation item type that is a set.
@@ -225,7 +363,23 @@ If this object type is encountered, we must traverse a bit further.
 
 Handling all these details should look something like this, as the final else clause of the conditional:
 
-![](media/image14.emf)  If you’re feeling a little giddy right now, don’t worry that’s perfectly normal.
+```cpp
+ else {
+  if( kA3DTypeRiSet == type ) {
+    A3DRiSetData risd;
+    A3D_INITIALIZE_DATA(A3DRiSetData, risd);
+    if(A3D_SUCCESS != A3DRiSetGet( ntt, &risd ) ) {
+      return;
+    }
+    children = EntityArray( risd.m_ppRepItems, risd.m_ppRepItems + risd.m_uiRepItemsSize );
+    A3DRiSetGet( nullptr, &risd );
+  } else {
+    fcn( path );
+  }
+}
+```
+
+If you’re feeling a little giddy right now, don’t worry that’s perfectly normal.
 Together, we’ve successfully implemented a well-behaved function for traversing the Exchange product structure in a way that is very useful to us.
 By using a function object, we’ve separated the traversal from the work done to build the scene graph.
 And you’ve probably learned a little something about the data structure of Exchange in the process.
@@ -245,7 +399,37 @@ We’ll do this by following to guidance provided by our Programming Guide’s s
 
 Implement the constructor as follows:
 
-![](media/image15.emf)
+```cpp
+// Create a vector to hold the cascaded attributes handles
+QVector<A3DMiscCascadedAttributes*> cascaded_attribs;
+
+// Create the "root" cascaded attribute handle
+cascaded_attribs.push_back( nullptr );
+A3DMiscCascadedAttributesCreate( &cascaded_attribs.back() );
+
+// for each entity in the path,
+for( auto ntt : path ) {
+  if( A3DEntityIsBaseWithGraphicsType( ntt ) ) {
+    // get the handle to the previous cascaded attributes
+    auto father = cascaded_attribs.back();
+    
+    // create a new cascaded attributes handle for this entity
+    cascaded_attribs.push_back( nullptr );
+    A3DMiscCascadedAttributesCreate( &cascaded_attribs.back() );
+    
+    // push this handle onto the stack
+    A3DMiscCascadedAttributesPush( cascaded_attribs.back(), ntt, father );
+  }
+}
+
+// Compute the cascaded attributes data
+A3D_INITIALIZE_DATA(A3DMiscCascadedAttributesData, d);
+A3DMiscCascadedAttributesGet( cascaded_attribs.back(), &d );
+
+for( auto attrib : cascaded_attribs ) {
+    A3DMiscCascadedAttributesDelete( attrib );
+}
+```
 
 The comments within the code should do a reasonable job of explaining what the approach is.
 
@@ -253,7 +437,9 @@ Once this object is constructed, we’ve populated the data field appropriately.
 All that’s left to do is to free the object in the destructor.
 Add this line of code to the destructor:
 
-![](media/image16.emf)
+```cpp
+A3DMiscCascadedAttributesGet( nullptr, &d );
+```
 
 And that’s all that’s to it.
 
@@ -269,7 +455,17 @@ Open it in your editor now, and you’ll find the familiar stubbed out implement
 To begin the task, we should perform some sanity checks on the incoming handle.
 Specifically, we want to ensure it is the correct concrete object type we want to handle for this basic viewing workflow.
 
-![](media/image17.emf)
+```cpp
+A3DEEntityType tess_type = kA3DTypeUnknown;
+if(A3D_SUCCESS != A3DEntityGetType( tess_base, &tess_type ) ) {
+  return nullptr;
+}
+
+// Ensure we're working only on the type we care about
+if( tess_type != kA3DTypeTess3D ) {
+  return nullptr;
+}
+```
 
 The handle passed into the function is a base type called `A3DTessBase.`
 For the purposes of this basic viewing workflow, we’ll only handle the concrete type `A3DTess3D.`
@@ -278,7 +474,17 @@ If a null handle is passed in, this code will handle it correctly and bail out.
 The base tessellation type contains information we’ll need that is common to all derived types, specifically the array of coordinates.
 Add the code to read the base data from HOOPS Exchange.
 
-![](media/image18.emf)
+```cpp
+// Read the coordinate array from the tess base data
+A3DTessBaseData tbd;
+A3D_INITIALIZE_DATA(A3DTessBaseData, tbd);
+if( A3D_SUCCESS != A3DTessBaseGet( tess_base, &tbd ) ) {
+  return nullptr;
+}
+
+A3DDouble const *coords = tbd.m_pdCoords;
+A3DUns32 const n_coords = tbd.m_uiCoordSize;
+```
 
 The coordinate data is provided as a C-style array - that is, it’s a pointer to an array of doubles, of a specified length.
 The size will always be evenly divisible by 3.
@@ -286,7 +492,17 @@ The size will always be evenly divisible by 3.
 The next task it to obtain the data associated with the concrete tessellation type.
 We’ll start by obtaining the C-style array for the normal vectors.
 
-![](media/image19.emf)
+```cpp
+3DTess3DData t3dd;
+A3D_INITIALIZE_DATA( A3DTess3DData, t3dd );
+if( A3D_SUCCESS != A3DTess3DGet( tess_base, &t3dd ) ) {
+A3DTessBaseGet( nullptr, &tbd );
+  return nullptr;
+}
+
+A3DDouble const *normals = t3dd.m_pdNormals;
+A3DUns32 const n_normals = t3dd.m_uiNormalSize;
+```
 
 Also stored in `A3DTess3DData` is an array of `A3DTessFaceData` objects, one per topological face in the exact geometry representation.
 Now that we have the array of coordinates and normal vectors, we can loop over the face data an interpret the tessellation referenced within.
@@ -299,7 +515,38 @@ We took a performance hit by generating the tessellation, but the benefit is a s
 Here’s the loop for reading the triangle data from HOOPS Exchange.
 It interleaves the triangle vertex position and its normal vector, as commonly done in vertex buffer objects used in visualization workflows.
 
-![](media/image20.emf)
+```cpp
+QVector<quint32> q_indices;
+QByteArray bufferBytes;
+quint32 const stride = sizeof(float) * 6; // 3 for vertex + 3 for normal
+for( auto tess_face_idx = 0u; tess_face_idx < t3dd.m_uiFaceTessSize; ++tess_face_idx ) { A3DTessFaceData const &d = t3dd.m_psFaceTessData[tess_face_idx];
+  auto sz_tri_idx = 0u;
+  auto ti_index = d.m_uiStartTriangulated;
+  if(kA3DTessFaceDataTriangle & d.m_usUsedEntitiesFlags) {
+    auto const num_tris = d.m_puiSizesTriangulated[sz_tri_idx++];
+    auto const pt_count = num_tris * 3; // 3 pts per triangle
+    auto const old_sz = bufferBytes.size();
+    bufferBytes.resize(bufferBytes.size() + stride * pt_count);
+    auto fptr = reinterpret_cast<float*>(bufferBytes.data() + old_sz);
+    for(auto tri = 0u; tri < num_tris; tri++) {
+    for(auto vert = 0u; vert < 3u; vert++) {
+      auto const &normal_index =
+      t3dd.m_puiTriangulatedIndexes[ti_index++];
+      auto const &coord_index =
+      t3dd.m_puiTriangulatedIndexes[ti_index++];
+
+      *fptr++ = coords[coord_index];
+      *fptr++ = coords[coord_index+1];
+      *fptr++ = coords[coord_index+2];
+      *fptr++ = normals[normal_index];
+      *fptr++ = normals[normal_index+1];
+      *fptr++ = normals[normal_index+2];
+      q_indices.push_back( q_indices.size() );
+      }
+    }
+  }
+}
+```
 
 When this loop finishes, we are left with a raw buffer containing the floating-point vertex positions and normal vectors for every triangle in the body.
 They’re stored sequentially, without considering the possibility of shared index values.
@@ -307,12 +554,55 @@ This results in a potentially larger buffer than needed but simplifies the code 
 
 We have all the data we need from Exchange, so let’s clean up after ourselves.
 
-![](media/image21.emf)
+```cpp
+A3DTess3DGet( nullptr, &t3dd );
+A3DTessBaseGet( nullptr, &tbd );
+```
 
 We must complete the function by creating the `Qt3D` primitives needed to render the data we just captured.
 As mentioned at the outset of this tutorial, we won’t spend much time describing the specifics of `Qt3D,` rather present the code as needed:
 
-![](media/image22.emf)
+```cpp
+auto buf = new Qt3DCore::QBuffer();
+
+buf->setData( bufferBytes );
+auto geometry = new QGeometry;
+auto position_attribute = new QAttribute( buf,
+QAttribute::defaultPositionAttributeName(), QAttribute::Float, 3, q_indices.size(), 0, stride );
+geometry->addAttribute( position_attribute );
+
+auto normal_attribute = new QAttribute( buf,
+QAttribute::defaultNormalAttributeName(), QAttribute::Float, 3, q_indices.size(), sizeof(float) * 3, stride );
+geometry->addAttribute( normal_attribute );
+
+
+QByteArray indexBytes;
+QAttribute::VertexBaseType ty;
+if (q_indices.size() < 65536) {
+  // we can use USHORT
+  ty = QAttribute::UnsignedShort;
+  indexBytes.resize(q_indices.size() * sizeof(quint16));
+  quint16 *usptr = reinterpret_cast<quint16*>(indexBytes.data());
+  for (int i = 0; i < int(q_indices.size()); ++i)
+    *usptr++ = static_cast<quint16>(q_indices.at(i));
+} else {
+  // use UINT - no conversion needed, but let's ensure int is 32-bit!
+  ty = QAttribute::UnsignedInt;
+  Q_ASSERT(sizeof(int) == sizeof(quint32));
+  indexBytes.resize(q_indices.size() * sizeof(quint32));
+  memcpy(indexBytes.data(), reinterpret_cast<const char*>(q_indices.data()), indexBytes.size());
+}
+
+auto *indexBuffer = new Qt3DCore::QBuffer(); indexBuffer->setData( indexBytes );
+QAttribute *indexAttribute = new QAttribute(indexBuffer, ty, 1, q_indices.size());
+indexAttribute->setAttributeType(QAttribute::IndexAttribute);
+geometry->addAttribute(indexAttribute);
+
+auto renderer = new Qt3DRender::QGeometryRenderer();
+renderer->setGeometry( geometry );
+
+return renderer
+```
 
 You’ve reached a major milestone with the completion of this step.
 Now, you can load a single part and view it.
@@ -320,7 +610,7 @@ It will appear in a default color (red), but it should be visible.
 Assemblies won’t visualize correctly because we aren’t handling transforms yet, but load the sample file samples/data/prc/Flange287.
 prc and you should see the following:
 
-<img src="media/image23.png" style="width:6.5in;height:5.26736in" alt="A picture containing text, tool Description automatically generated" />
+![](tuto_viewer_00.png)
 
 Next, we’ll focus on getting transforms correct so we can visualize assemblies correctly.
 
@@ -335,7 +625,16 @@ This means, to compute a world transform for each part, we must accumulate the t
 
 From this description, we can begin writing the implementation for createTransform (found in Transform.cpp) as follows:
 
-![](media/image24.emf)
+```cpp
+QMatrix4x4 net_matrix;
+for( auto const ntt : path ) {
+  A3DMiscTransformation *xform = getTransform( ntt );
+  net_matrix *= toMatrix( xform );
+}
+auto xform = new Qt3DCore::QTransform();
+xform->setMatrix( net_matrix );
+return xform;
+```
 
 This implementation does exactly what we described using the convenient fact that path includes the sequential list of handles to each object in the assembly hierarchy leading to the representation item.
 It uses two functions we must still define, `getTransform` and `toMatrix.`
@@ -349,7 +648,35 @@ In the path from a model file to a representation item, the only object types th
 Our code must handle both cases.
 Implement the `getTransform` function as follows:
 
-![](media/image25.emf)
+```cpp
+namespace {
+    A3DMiscTransformation *getTransform( A3DEntity *ntt ) {
+        A3DMiscTransformation *result = nullptr;
+        A3DEEntityType ntt_type = kA3DTypeUnknown;
+        A3DEntityGetType(ntt, &ntt_type );
+        if( kA3DTypeAsmProductOccurrence == ntt_type ) {
+            A3DAsmProductOccurrenceData d;
+            A3D_INITIALIZE_DATA(A3DAsmProductOccurrenceData, d);
+            A3DAsmProductOccurrenceGet( ntt, &d );
+            result = d.m_pLocation ? d.m_pLocation : getTransform( d.m_pPrototype );
+            A3DAsmProductOccurrenceGet( nullptr, &d );
+        } else if( ntt_type > kA3DTypeRi && ntt_type <= kA3DTypeRiCoordinateSystemItem) {
+            A3DRiRepresentationItemData d;
+            A3D_INITIALIZE_DATA(A3DRiRepresentationItemData, d);
+            A3DRiRepresentationItemGet( ntt, &d );
+            if( auto ti_cs = d.m_pCoordinateSystem ) {
+                A3DRiCoordinateSystemData cs_d;
+                A3D_INITIALIZE_DATA(A3DRiCoordinateSystemData, cs_d);
+                A3DRiCoordinateSystemGet( d.m_pCoordinateSystem, &cs_d );
+                result = cs_d.m_pTransformation;
+                A3DRiCoordinateSystemGet( nullptr, &cs_d );
+            }
+            A3DRiRepresentationItemGet( nullptr, &d );
+        }
+        return result;
+    }
+}
+```
 
 There are two items worth noting within this implementation.
 Perhaps you’ve already spotted them.
@@ -368,19 +695,74 @@ With an `A3DMiscTransformation` handle, we are now ready to implement toMatrix, 
 We must handle both cases.
 To do so, create the function in the top of the anonymous namespace with this code:
 
-![](media/image26.emf)
+```cpp
+QMatrix4x4 toMatrix( A3DMiscTransformation *xfrm ) {
+  if( xfrm ) {
+    A3DEEntityType xfrm_type = kA3DTypeUnknown;
+    A3DEntityGetType( xfrm, &xfrm_type );
+    switch( xfrm_type ) {
+      case kA3DTypeMiscCartesianTransformation:
+        return getMatrixFromCartesian( xfrm );
+        break;
+      case kA3DTypeMiscGeneralTransformation:
+        return getMatrixFromGeneralTransformation( xfrm );
+        break;
+      default:
+        throw std::invalid_argument( "Unexpected type." );
+        break;
+    }
+  }
+  return QMatrix4x4();
+}
+```
+
+
 
 The general transformation presents its matrix as a 16-element array of doubles representing a 4x4 matrix.
 It’s a simple matter of copying these values into the `QMatrix4x4` object.
 Create the following function at the top of the anonymous namespace to handle this case.
 
-![](media/image27.emf)
+```cpp
+QMatrix4x4 getMatrixFromGeneralTransformation( A3DMiscGeneralTransformation *xform ) {
+  A3DMiscGeneralTransformationData d;
+  A3D_INITIALIZE_DATA(A3DMiscGeneralTransformationData, d);
+  A3DMiscGeneralTransformationGet( xform, &d );
+  
+  auto const coeff = d.m_adCoeff;
+  QMatrix4x4 result;
+  for( auto row = 0u; row < 4u; ++row ) {
+    for( auto col = 0u; col < 4u; ++col ) {
+      result(row,col) = static_cast<float>(coeff[row + col * 4]);
+    }
+  }
+return result;
+```
 
 Handling the case of a cartesian transformation is a bit more involved.
 We must read the basic data and perform some elemental algebra to compute the values for the matrix.
 Add this code to the anonymous namespace for extracting the cartesian transformation data.
 
-![](media/image28.emf)
+```cpp
+QMatrix4x4 getMatrixFromCartesian( A3DMiscCartesianTransformation *xform ) {
+  A3DMiscCartesianTransformationData d;
+  A3D_INITIALIZE_DATA(A3DMiscCartesianTransformationData, d);
+  A3DMiscCartesianTransformationGet( xform, &d );
+  auto const mirror = (d.m_ucBehaviour & kA3DTransformationMirror) ? -1. : 1.;
+  auto const s = toQVector3D( d.m_sScale );
+  auto const o = toQVector3D( d.m_sOrigin );
+  auto const x = toQVector3D( d.m_sXVector );
+  auto const y = toQVector3D( d.m_sYVector );
+  auto const z = QVector3D::crossProduct( x, y ) * mirror;
+  A3DMiscCartesianTransformationGet( nullptr, &d );
+  return QMatrix4x4(
+    x.x() * s.x(), y.x() * s.y(), z.x() * s.z(), o.x(),
+    x.y() * x.x(), y.y() * s.y(), z.y() * s.z(), o.y(),
+    x.z() * s.x(), y.z() * s.y(), z.z() * s.z(), o.z(),
+    0.f,           0.f,           0.f,           1.f
+  );
+}
+```
+
 
 This code is using the function `toQVector3D`, which creates a `QVector3D` from an `A3DVector3DData` object.
 It is implemented in _Transform.h_.
@@ -388,7 +770,7 @@ It is implemented in _Transform.h_.
 Once you’ve added this function, you’ll have a completed implementation ready for testing.
 Run your application and load an assembly file, such as _data/prc/\_micro engine.prc_.
 
-<img src="media/image29.png" style="width:6.5in;height:6.19722in" alt="A picture containing diagram Description automatically generated" />
+![](tuto_viewer_01.png)
 
 # Step 6: Creating the Materials
 
@@ -407,13 +789,41 @@ Let’s begin by handling that case.
 
 Update the function as follows:
 
-![](media/image30.emf)
+```cpp
+Qt3DCore::QComponent *createMaterial( A3DGraphStyleData const &style_data ) {
+  auto material = new Qt3DExtras::QDiffuseSpecularMaterial();
+  material->setDiffuse(QColor("red"));
+  if( !style_data.m_bMaterial ) {
+    auto const a = style_data.m_bIsTransparencyDefined ? style_data.m_ucTransparency : 255u;
+    material->setDiffuse(getColor( style_data.m_uiRgbColorIndex, a ));
+  }
+  return material;
+}
+```
+
 
 Here, we’re using a function we must still implement called `getColor.`
 This function takes an RGB color index (and alpha) and returns a `QColor.`
 Implement `getColor` in an anonymous namespace above `createMaterial.`
 
-![](media/image31.emf)
+```cpp
+namespace {
+  QColor getColor( A3DUns32 const &color_idx, int const &a ) {
+    if( A3D_DEFAULT_COLOR_INDEX == color_idx ) {
+      return QColor( 255, 0, 0 );
+    }
+  
+    A3DGraphRgbColorData rgb_color_data;
+    A3D_INITIALIZE_DATA( A3DGraphRgbColorData, rgb_color_data );
+    A3DGlobalGetGraphRgbColorData( color_idx, &rgb_color_data );
+    auto const &r = rgb_color_data.m_dRed;
+    auto const &g = rgb_color_data.m_dGreen;
+    auto const &b = rgb_color_data.m_dBlue;
+    return QColor( static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255), a);
+  }
+}
+```
+
 
 Color data is stored by integer index in HOOPS Exchange.
 This implementation first checks if the index is equal to `A3D_DEFAULT_COLOR_INDEX`, indicating that no color has been assigned.
@@ -422,12 +832,31 @@ Creating a `QColor` object from the double precision definition from Exchange is
 
 With this implementation, you’ll find many parts will now load and display in their correct color.
 
-<img src="media/image32.png" style="width:6.5in;height:5.59097in" alt="A picture containing diagram Description automatically generated" />
+![](tuto_viewer_02.png)
 
 Let’s add an additional case to handle two or the three forms style data can take.
 Update the if clause in createMaterial with the following else block.
 
-![](media/image33.emf)
+```cpp
+else {
+  A3DBool is_texuture = false;
+  A3DGlobalIsMaterialTexture( style_data.m_uiRgbColorIndex, &is_texuture );
+  if( ! is_texuture ) {
+    A3DGraphMaterialData material_data;
+    A3D_INITIALIZE_DATA( A3DGraphMaterialData, material_data );
+    A3DGlobalGetGraphMaterialData( style_data.m_uiRgbColorIndex, &material_data );
+    auto const ambient_color = getColor( material_data.m_uiAmbient, static_cast<int>(255 * material_data.m_dAmbientAlpha) );
+    auto const diffuse_color = getColor( material_data.m_uiDiffuse, static_cast<int>(255 * material_data.m_dDiffuseAlpha) );
+    if( ambient_color.alpha() == 255 && diffuse_color.alpha() == 0 ) {
+    material->setDiffuse( ambient_color );
+    } else if( ambient_color.alpha() == 0 && diffuse_color.alpha() == 255 ) {
+        material->setDiffuse( diffuse_color );
+    }
+    material->setSpecular(getColor( material_data.m_uiSpecular, material_data.m_dSpecularAlpha ));
+  }
+}
+```
+
 
 This handles the slightly more complicated material definition.
 Handling textures is beyond the scope of this basic viewing tutorial.
