@@ -59,7 +59,7 @@ After installing the CMake Tools extension, you can use the buttons found on the
 Open a Visual Studio command prompt and execute qtenv2.bat located in the bin folder of your Qt installation.
 Next, create a subfolder in the project directory named _build_ and change to it.
 Run `qt-cmake ..` to generate the required files.
-This will create _qt_he_viewer.sln_ which you can open using the command `devenv qt_he_viewer`.sln.
+This will create _qt_he_viewer.sln_ which you can open using the command `devenv qt_he_viewer.sln`.
 
 ## Run
 
